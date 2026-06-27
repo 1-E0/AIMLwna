@@ -10,4 +10,6 @@ Terminal 2 cd smart-agri-web
 
 	composer install
 	php artisan serve --port=8001
-	http://127.0.0.1:8001/optimasi
+	
+
+buka: http://127.0.0.1:8001/optimasi
