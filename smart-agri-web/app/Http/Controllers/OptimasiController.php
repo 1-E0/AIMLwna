@@ -13,12 +13,10 @@ class OptimasiController extends Controller
     {
         $lahan = Lahan::findOrFail($lahan_id);
         
-        // Mengambil riwayat pemupukan, yang paling baru di atas
         $riwayats = RiwayatPemupukan::where('lahan_id', $lahan_id)
                         ->orderBy('created_at', 'desc')
                         ->get();
                         
-        // Mengambil riwayat terakhir untuk ditampilkan di grafik
         $hasilTerbaru = $riwayats->first();
 
         return view('optimasi', compact('lahan', 'riwayats', 'hasilTerbaru'));
@@ -35,12 +33,10 @@ class OptimasiController extends Controller
         $lahan = Lahan::findOrFail($lahan_id);
 
         try {
-            // Mencoba melakukan HTTP POST Request ke API Python (FastAPI)
-            $response = Http::timeout(5)->post('http://127.0.0.1:8000/predict', [
+            $response = Http::timeout(10)->post('http://127.0.0.1:8000/predict', [
                 'n_aktual' => $lahan->n_aktual,
                 'p_aktual' => $lahan->p_aktual,
                 'k_aktual' => $lahan->k_aktual,
-                // TAMBAHKAN BARIS INI:
                 'toleransi_ph' => $lahan->toleransi_ph,
                 'suhu' => $request->suhu,
                 'kelembaban' => $request->kelembaban,
@@ -50,20 +46,12 @@ class OptimasiController extends Controller
             if ($response->successful()) {
                 $data = $response->json();
             } else {
-                throw new \Exception("Endpoint API belum siap.");
+                throw new \Exception("Gagal menyambung ke AI");
             }
         } catch (\Exception $e) {
-            // FALLBACK DUMMY DATA (Selama Python belum dihubungkan)
-            $data = [
-                'rekomendasi_n' => round(rand(10, 25) * $lahan->luas_lahan, 2),
-                'rekomendasi_p' => round(rand(5, 15) * $lahan->luas_lahan, 2),
-                'rekomendasi_k' => round(rand(8, 20) * $lahan->luas_lahan, 2),
-                'estimasi_panen' => round(rand(4, 9) * $lahan->luas_lahan, 2), // Dalam Ton
-                'estimasi_biaya' => rand(500000, 1500000) * $lahan->luas_lahan // Dalam Rupiah
-            ];
+            return back()->with('error', 'Pastikan Python FastAPI menyala. Error: ' . $e->getMessage());
         }
 
-        // Simpan hasil ke Database Riwayat Pemupukan
         RiwayatPemupukan::create([
             'lahan_id' => $lahan->id,
             'tanggal_kalkulasi' => now(),
@@ -75,26 +63,16 @@ class OptimasiController extends Controller
             'rekomendasi_k' => $data['rekomendasi_k'],
             'estimasi_panen' => $data['estimasi_panen'],
             'estimasi_biaya' => $data['estimasi_biaya'],
-            'status' => 'Ditinjau'
+            'ai_log' => $data['ai_log'] // Simpan log detail dari Python
         ]);
 
-        return redirect()->route('optimasi.index', $lahan->id)->with('success', 'Kalkulasi Hybrid KNN-PSO Berhasil Dieksekusi!');
+        return redirect()->route('optimasi.index', $lahan->id)->with('success', 'Kalkulasi AI Selesai!');
     }
 
-    public function terapkan($riwayat_id)
+    public function detail($riwayat_id)
     {
-        $riwayat = RiwayatPemupukan::findOrFail($riwayat_id);
-        $riwayat->update(['status' => 'Diterapkan']);
-        
-        // Memperbarui profil lahan dengan nutrisi baru setelah pupuk diterapkan
-        $lahan = Lahan::findOrFail($riwayat->lahan_id);
-        $lahan->update([
-            'n_aktual' => $lahan->n_aktual + $riwayat->rekomendasi_n,
-            'p_aktual' => $lahan->p_aktual + $riwayat->rekomendasi_p,
-            'k_aktual' => $lahan->k_aktual + $riwayat->rekomendasi_k,
-        ]);
-
-        return back()->with('success', 'Instruksi pemupukan telah diterapkan! Kadar hara lahan otomatis diperbarui.');
+        $riwayat = RiwayatPemupukan::with('lahan')->findOrFail($riwayat_id);
+        return view('detail', compact('riwayat'));
     }
 
     public function exportCsv($lahan_id)
@@ -104,7 +82,7 @@ class OptimasiController extends Controller
                         ->orderBy('tanggal_kalkulasi', 'desc')
                         ->get();
 
-        $fileName = "Laporan_Pemupukan_" . $lahan->kode_petak . ".csv";
+        $fileName = "Laporan_AI_" . $lahan->kode_petak . ".csv";
 
         $headers = array(
             "Content-type"        => "text/csv",
@@ -114,7 +92,7 @@ class OptimasiController extends Controller
             "Expires"             => "0"
         );
 
-        $columns = array('Tanggal', 'Suhu (C)', 'Kelembaban (%)', 'Curah Hujan (mm)', 'Rekomendasi N (kg)', 'Rekomendasi P (kg)', 'Rekomendasi K (kg)', 'Estimasi Panen (Ton)', 'Estimasi Biaya (Rp)', 'Status');
+        $columns = array('Tanggal', 'Suhu (C)', 'Kelembaban (%)', 'Curah Hujan (mm)', 'Rekomendasi N (kg)', 'Rekomendasi P (kg)', 'Rekomendasi K (kg)', 'Estimasi Panen (Ton)');
 
         $callback = function() use($riwayats, $columns) {
             $file = fopen('php://output', 'w');
@@ -129,9 +107,7 @@ class OptimasiController extends Controller
                     $riwayat->rekomendasi_n,
                     $riwayat->rekomendasi_p,
                     $riwayat->rekomendasi_k,
-                    $riwayat->estimasi_panen,
-                    $riwayat->estimasi_biaya,
-                    $riwayat->status
+                    $riwayat->estimasi_panen
                 ));
             }
             fclose($file);

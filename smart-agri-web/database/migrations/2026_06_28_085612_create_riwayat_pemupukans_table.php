@@ -15,15 +15,15 @@ return new class extends Migration
             $table->id();
             $table->foreignId('lahan_id')->constrained('lahans')->onDelete('cascade');
             $table->date('tanggal_kalkulasi');
-            $table->float('suhu'); // Data makro meteorologi
+            $table->float('suhu'); 
             $table->float('kelembaban');
             $table->float('curah_hujan');
-            $table->float('rekomendasi_n'); // Hasil dari PSO
+            $table->float('rekomendasi_n'); 
             $table->float('rekomendasi_p'); 
             $table->float('rekomendasi_k');
-            $table->float('estimasi_panen'); // Proyeksi panen KNN
-            $table->float('estimasi_biaya'); // Anggaran pupuk
-            $table->enum('status', ['Ditinjau', 'Diterapkan'])->default('Ditinjau');
+            $table->float('estimasi_panen'); 
+            $table->float('estimasi_biaya'); 
+            $table->json('ai_log')->nullable(); // Menampung hasil visualisasi AI
             $table->timestamps();
         });
     }

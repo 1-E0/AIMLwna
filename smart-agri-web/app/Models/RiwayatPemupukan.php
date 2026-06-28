@@ -22,10 +22,14 @@ class RiwayatPemupukan extends Model
         'rekomendasi_k',
         'estimasi_panen',
         'estimasi_biaya',
-        'status',
+        'ai_log'
     ];
 
-    // Relasi: Riwayat ini milik plot lahan tertentu
+    // Beritahu Laravel bahwa ai_log adalah array JSON
+    protected $casts = [
+        'ai_log' => 'array',
+    ];
+
     public function lahan()
     {
         return $this->belongsTo(Lahan::class);
