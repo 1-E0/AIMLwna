@@ -13,7 +13,7 @@
     <nav class="bg-green-600 text-white p-4 shadow-md">
         <div class="container mx-auto flex justify-between items-center">
             <h1 class="text-2xl font-bold">🌱 Smart Agriculture Dashboard</h1>
-            <span class="text-sm bg-green-700 py-1 px-3 rounded-full">Mode Akses Cepat (Tanpa Login)</span>
+    
         </div>
     </nav>
 

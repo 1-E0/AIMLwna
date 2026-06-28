@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import pandas as pd
 import numpy as np
 from sklearn.neighbors import KNeighborsRegressor
+from sklearn.preprocessing import StandardScaler # [PERBAIKAN 1] Import StandardScaler
 import pyswarms as ps
 
 app = FastAPI(title="Smart Agriculture AI Microservice")
@@ -18,22 +19,28 @@ class LahanData(BaseModel):
 
 DATASET_FILE = "dataset_knn_pso_ready.csv"
 knn_model = KNeighborsRegressor(n_neighbors=5)
+scaler = StandardScaler() # [PERBAIKAN 1] Inisialisasi Scaler global
 
 # Simpan dataset ke memory global agar bisa diakses untuk visualisasi detail
 X_train_global = None
 y_train_global = None
 
 def prepare_model():
-    global knn_model, X_train_global, y_train_global
+    global knn_model, scaler, X_train_global, y_train_global
     try:
         df = pd.read_csv(DATASET_FILE)
         X_train_global = df[['N_ratio', 'P_ratio', 'K_ratio', 'Soil_pH', 'Temperature_C', 'Humidity_pct', 'Rainfall_mm']].values
         y_train_global = df['Yield_ton_per_ha'].values
         
-        knn_model.fit(X_train_global, y_train_global)
+        # [PERBAIKAN 1] Fit dan Transform data fitur sebelum masuk KNN
+        X_train_global_scaled = scaler.fit_transform(X_train_global)
+        
+        # Latih model menggunakan data yang sudah diskala
+        knn_model.fit(X_train_global_scaled, y_train_global)
+        
         print("=====================================================")
         print(f"SUCCESS: Model KNN dilatih dengan dataset '{DATASET_FILE}'")
-        print(f"Total Fitur     : {X_train_global.shape[1]} Variabel")
+        print(f"Total Fitur     : {X_train_global.shape[1]} Variabel (Scaled)")
         print(f"Total Baris Data: {len(df)} Baris")
         print("=====================================================")
     except FileNotFoundError:
@@ -45,16 +52,36 @@ prepare_model()
 
 def fitness_function(particles, n_aktual, p_aktual, k_aktual, toleransi_ph, suhu, kelembaban, curah_hujan):
     n_particles = particles.shape[0]
-    costs = np.zeros(n_particles)
+    
     HARGA_N = 12000; HARGA_P = 15000; HARGA_K = 14000; HARGA_PANEN_PER_TON = 6000000 
-
-    for i in range(n_particles):
-        delta_n, delta_p, delta_k = particles[i]
-        biaya_pupuk = (delta_n * HARGA_N) + (delta_p * HARGA_P) + (delta_k * HARGA_K)
-        input_features = np.array([[n_aktual + delta_n, p_aktual + delta_p, k_aktual + delta_k, toleransi_ph, suhu, kelembaban, curah_hujan]])
-        
-        prediksi_panen = knn_model.predict(input_features)[0]
-        costs[i] = biaya_pupuk - (prediksi_panen * HARGA_PANEN_PER_TON)
+    
+    # [PERBAIKAN 2] Vectorization (menghilangkan for-loop agar AI berlari lebih cepat)
+    delta_n = particles[:, 0]
+    delta_p = particles[:, 1]
+    delta_k = particles[:, 2]
+    
+    biaya_pupuk = (delta_n * HARGA_N) + (delta_p * HARGA_P) + (delta_k * HARGA_K)
+    
+    # Buat matriks fitur untuk seluruh partikel sekaligus
+    input_features = np.zeros((n_particles, 7))
+    input_features[:, 0] = n_aktual + delta_n
+    input_features[:, 1] = p_aktual + delta_p
+    input_features[:, 2] = k_aktual + delta_k
+    input_features[:, 3] = toleransi_ph
+    input_features[:, 4] = suhu
+    input_features[:, 5] = kelembaban
+    input_features[:, 6] = curah_hujan
+    
+    # [PERBAIKAN 1] Skala input fitur sebelum diprediksi
+    input_features_scaled = scaler.transform(input_features)
+    prediksi_panen = knn_model.predict(input_features_scaled)
+    
+    # [PERBAIKAN 3] Penalti Agronomi (Mencegah Over-fertilization)
+    # Jika sistem menambahkan pupuk terlalu ekstrem, kita berikan "biaya kerugian tak terlihat"
+    # agar kurva konvergensi PSO mencari titik penambahan pupuk yang rasional.
+    penalti_toksisitas = (delta_n + delta_p + delta_k) * 30000 
+    
+    costs = biaya_pupuk - (prediksi_panen * HARGA_PANEN_PER_TON) + penalti_toksisitas
         
     return costs
 
@@ -66,7 +93,9 @@ def read_root():
 def predict_optimal_fertilizer(data: LahanData):
     try:
         options = {'c1': 1.5, 'c2': 1.5, 'w': 0.5} 
-        bounds = (np.array([0.0, 0.0, 0.0]), np.array([50.0, 50.0, 50.0]))
+        
+        # [PERBAIKAN 4] Menurunkan batas atas pencarian (bounds) menjadi lebih realistis (25 kg)
+        bounds = (np.array([0.0, 0.0, 0.0]), np.array([25.0, 25.0, 25.0]))
         
         optimizer = ps.single.GlobalBestPSO(n_particles=30, dimensions=3, options=options, bounds=bounds)
         
@@ -81,16 +110,17 @@ def predict_optimal_fertilizer(data: LahanData):
         rekomendasi_p = round(best_pos[1], 2)
         rekomendasi_k = round(best_pos[2], 2)
         
+        # Kalkulasi Ulang Titik Final dengan Scaler
         final_features = np.array([[data.n_aktual + rekomendasi_n, data.p_aktual + rekomendasi_p, data.k_aktual + rekomendasi_k, data.toleransi_ph, data.suhu, data.kelembaban, data.curah_hujan]])
-        estimasi_panen = round(knn_model.predict(final_features)[0], 2)
+        final_features_scaled = scaler.transform(final_features) # Transform final point
+        
+        estimasi_panen = round(knn_model.predict(final_features_scaled)[0], 2)
         estimasi_biaya = (rekomendasi_n * 12000) + (rekomendasi_p * 15000) + (rekomendasi_k * 14000)
 
-        # MENGAMBIL DATA DETAIL UNTUK PRESENTASI
-        # 1. Ambil Cost History dari tiap iterasi PSO
         cost_history = optimizer.cost_history
         
-        # 2. Ambil 5 Titik Tetangga Terdekat dari algoritma KNN
-        distances, indices = knn_model.kneighbors(final_features)
+        # Hitung Neighbors menggunakan scaled data
+        distances, indices = knn_model.kneighbors(final_features_scaled)
         knn_details = []
         for i in range(len(indices[0])):
             idx = indices[0][i]
